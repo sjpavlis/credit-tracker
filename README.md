@@ -58,7 +58,7 @@ This repo is designed to be **fetched at build/deploy time** and served as stati
 host app (e.g. a Spring Boot site). Because everything is static and self-contained, dropping the
 files under any static path works.
 
-### Spring Boot (used by [patrices](https://github.com/sjpavlis/patrices))
+### Spring Boot
 
 During CI, clone this repo into the host's static resources before packaging:
 
