@@ -1,145 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Credit Tracker</title>
-  <meta name="description" content="Track credit cards, cardholders, balances and due dates in one place." />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='11' x='0' y='3' rx='2' fill='%236366f1'/><rect width='16' height='2.5' x='0' y='5.5' fill='%23111'/></svg>" />
-  <link rel="stylesheet" href="css/styles.css" />
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Credit Tracker</title>
+<meta name="description" content="Track credit cards, bills, shared payers, and installments."/>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='11' x='0' y='3' rx='2' fill='%236366f1'/><rect width='16' height='2.5' x='0' y='5.5' fill='%23111'/></svg>"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"/>
+<link rel="stylesheet" href="css/styles.css"/>
 </head>
 <body>
-  <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">&#128179;</span>
-        <div>
-          <h1>Credit Tracker</h1>
-          <p class="tagline">Cards, cardholders &amp; due dates &mdash; all in one place</p>
-        </div>
-      </div>
-      <div class="topbar-actions">
-        <button class="btn btn-ghost" id="manageUsersBtn" type="button">Cardholders</button>
-        <button class="btn btn-primary" id="addCardBtn" type="button">+ Add card</button>
-      </div>
-    </header>
-
-    <section class="stats" id="stats" aria-label="Summary"></section>
-
-    <section class="toolbar">
-      <div class="filters" id="userFilters" role="tablist" aria-label="Filter by cardholder"></div>
-      <label class="sort">
-        <span>Sort</span>
-        <select id="sortSelect">
-          <option value="due">Due date</option>
-          <option value="balance">Balance</option>
-          <option value="utilization">Utilization</option>
-          <option value="name">Card name</option>
-        </select>
-      </label>
-    </section>
-
-    <main>
-      <div class="card-grid" id="cardGrid"></div>
-      <div class="empty" id="emptyState" hidden>
-        <div class="empty-art" aria-hidden="true">&#128179;</div>
-        <h2>No cards yet</h2>
-        <p>Add your first credit card to start tracking due dates.</p>
-        <div class="empty-actions">
-          <button class="btn btn-primary" id="emptyAddBtn" type="button">+ Add card</button>
-          <button class="btn btn-ghost" id="loadSampleBtn" type="button">Load sample data</button>
-        </div>
-      </div>
-    </main>
-
-    <footer class="footnote">
-      <span>Data is stored locally in your browser. Nothing is sent to a server.</span>
-      <button class="btn btn-link" id="exportBtn" type="button">Export</button>
-      <button class="btn btn-link" id="importBtn" type="button">Import</button>
-      <input type="file" id="importFile" accept="application/json" hidden />
-    </footer>
-  </div>
-
-  <!-- Card form modal -->
-  <div class="modal-overlay" id="cardModal" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cardModalTitle">
-      <div class="modal-head">
-        <h2 id="cardModalTitle">Add card</h2>
-        <button class="icon-btn" id="cardModalClose" type="button" aria-label="Close">&times;</button>
-      </div>
-      <form id="cardForm" class="form">
-        <input type="hidden" id="cardId" />
-        <div class="field">
-          <label for="cardHolder">Cardholder</label>
-          <select id="cardHolder" required></select>
-        </div>
-        <div class="grid-2">
-          <div class="field">
-            <label for="cardName">Card name</label>
-            <input id="cardName" type="text" placeholder="e.g. Platinum Rewards" required />
-          </div>
-          <div class="field">
-            <label for="cardBank">Bank / issuer</label>
-            <input id="cardBank" type="text" placeholder="e.g. BPI" required />
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="field">
-            <label for="cardLast4">Last 4 digits</label>
-            <input id="cardLast4" type="text" inputmode="numeric" maxlength="4" placeholder="1234" pattern="\d{4}" />
-          </div>
-          <div class="field">
-            <label for="cardColor">Accent</label>
-            <input id="cardColor" type="color" value="#6366f1" />
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="field">
-            <label for="cardLimit">Credit limit</label>
-            <input id="cardLimit" type="number" min="0" step="0.01" placeholder="0.00" />
-          </div>
-          <div class="field">
-            <label for="cardBalance">Current balance</label>
-            <input id="cardBalance" type="number" min="0" step="0.01" placeholder="0.00" />
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="field">
-            <label for="cardStatementDay">Statement day</label>
-            <input id="cardStatementDay" type="number" min="1" max="31" placeholder="1&ndash;31" />
-          </div>
-          <div class="field">
-            <label for="cardDueDay">Due day <span class="req">*</span></label>
-            <input id="cardDueDay" type="number" min="1" max="31" placeholder="1&ndash;31" required />
-          </div>
-        </div>
-        <div class="modal-foot">
-          <button type="button" class="btn btn-danger-ghost" id="deleteCardBtn" hidden>Delete</button>
-          <span class="spacer"></span>
-          <button type="button" class="btn btn-ghost" id="cardCancelBtn">Cancel</button>
-          <button type="submit" class="btn btn-primary">Save card</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- Cardholders modal -->
-  <div class="modal-overlay" id="userModal" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="userModalTitle">
-      <div class="modal-head">
-        <h2 id="userModalTitle">Cardholders</h2>
-        <button class="icon-btn" id="userModalClose" type="button" aria-label="Close">&times;</button>
-      </div>
-      <div class="form">
-        <form id="userForm" class="add-user-row">
-          <input id="userName" type="text" placeholder="Add a cardholder name" required />
-          <button type="submit" class="btn btn-primary">Add</button>
-        </form>
-        <ul class="user-list" id="userList"></ul>
-      </div>
-    </div>
-  </div>
-
-  <script src="js/app.js"></script>
+<!-- App shell rendered by JS below -->
+<div id="ct-root"></div>
+<script src="js/app.js"></script>
 </body>
 </html>
