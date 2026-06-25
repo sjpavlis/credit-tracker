@@ -1,6 +1,6 @@
 # Credit Tracker
 
-> A standalone, zero-dependency single-file app for tracking credit cards, bills,
+> A standalone, zero-dependency app for tracking credit cards, bills,
 > shared payers, and installments.
 
 One HTML file plus dedicated CSS and JS. No build step, no backend, no framework. Data lives
@@ -12,21 +12,29 @@ abstraction so any host app can swap in its own API without touching the UI.
 ## Features
 
 - **Dashboard** — total outstanding, monthly due, upcoming due dates with overdue
-  highlighting, "who owes what" per-person breakdown, active installment summary.
+  highlighting, settlements ("who owes whom" directional flows), spending breakdowns
+  by category and by person, active installment summary.
 - **Cards** — create/edit/delete with owner, network, last 4 digits, credit limit,
   statement day, due day, accent color.
-- **Transactions** — description, amount, date, card assignment, multi-user split
-  (equal / custom amounts / percentage), optional installment plan.
-- **Splits** — tag multiple users per transaction; supports equal split, custom
-  amounts, or percentage mode. Math uses integer cents with largest-remainder
-  distribution so splits always reconcile exactly.
-- **Installments** — N-month plans with progress tracking, per-month amount, remaining
-  balance, and a dedicated schedule view.
+- **Transactions** — description, category, amount, date, card assignment, multi-user
+  split (equal / custom amounts), optional installment plan.
+- **Splits** — tag multiple users per transaction; supports equal split or custom
+  amounts. Math uses integer cents with largest-remainder distribution so splits
+  always reconcile exactly. Duplicate people are rejected.
+- **Billing cycles** — transactions are grouped into statement periods based on each
+  card's due day. The card detail view shows one cycle at a time with prev/next
+  navigation, and stats/settlements/breakdowns are scoped to the selected cycle.
+- **Installments** — N-month plans with a visual schedule, forecasted per-month due
+  dates, and **per-person payment tracking** (each payer advances independently).
+- **Categories** — optional label per transaction with autocomplete suggestions,
+  surfaced in spending breakdowns.
+- **Theming** — light / dark mode toggle (persisted), plus CSS custom properties for
+  full rebranding.
 - **States** — loading spinner, error display with retry, empty states for cards and
   transactions.
 - **Import / Export** — full JSON backup and restore.
-- **Responsive** — mobile + desktop, dark theme, accessible (semantic HTML, focus
-  trapping, aria attributes, keyboard navigation).
+- **Responsive** — mobile + desktop, accessible (semantic HTML, focus trapping, aria
+  attributes, keyboard navigation).
 
 ---
 
@@ -35,11 +43,17 @@ abstraction so any host app can swap in its own API without touching the UI.
 ```bash
 git clone https://github.com/sjpavlis/credit-tracker.git
 cd credit-tracker
-# open index.html directly, or serve it:
+# serve it over a local web server:
 python -m http.server 8000   # visit http://localhost:8000
 ```
 
 No install, no dependencies.
+
+> **Important:** serve the app over `http://` (e.g. the command above) rather than
+> opening `index.html` directly via `file://`. Browsers treat the `file://` origin as
+> opaque, so `localStorage` may not persist and your data won't be saved between
+> reloads. Any real web server works — including how a host app like a Spring Boot
+> backend serves it over `http(s)://`.
 
 ---
 
@@ -83,15 +97,24 @@ The app persists (and exports/imports) this structure:
     {
       "id": "ghi789",
       "cardId": "def456",
-      "description": "Groceries",
-      "amountCents": 800000,     // integer cents (8,000.00)
-      "date": "2026-06-10",     // ISO date string
+      "description": "iPhone 15",
+      "category": "Shopping",    // optional label, "" if unset
+      "amountCents": 6000000,    // integer cents (60,000.00)
+      "date": "2026-03-01",     // ISO date string
       "splits": [
-        { "userId": "abc123", "amountCents": 400000, "paid": false },
-        { "userId": "xyz999", "amountCents": 400000, "paid": false }
+        { "userId": "abc123", "amountCents": 3000000, "paid": false },
+        { "userId": "xyz999", "amountCents": 3000000, "paid": false }
       ],
-      "installment": null,       // or { "months": 12, "monthsPaid": 3 }
-      "createdAt": "2026-06-10"
+      "installment": {           // or null for a one-time charge
+        "months": 12,
+        "monthsPaid": 3,         // derived: min across splitPayments
+        "startDate": "2026-03-01", // first payment date; drives due-date forecast
+        "splitPayments": {       // per-person months paid (independent)
+          "abc123": 4,
+          "xyz999": 3
+        }
+      },
+      "createdAt": "2026-03-01"
     }
   ]
 }
@@ -100,8 +123,15 @@ The app persists (and exports/imports) this structure:
 **Key invariants:**
 - All money values are **integer cents** (multiply display amounts by 100).
 - `splits[].amountCents` always sums to `transaction.amountCents`.
-- Installment `monthsPaid` ≤ `months`. Remaining = per-month × (months − monthsPaid),
-  where per-month amounts use largest-remainder distribution for exact reconciliation.
+- `category` is an optional string (`""` when unset).
+- For installments:
+  - `months` is the total number of monthly payments.
+  - `splitPayments[userId]` tracks how many months each payer has settled, so people
+    can be at different points in the plan.
+  - `monthsPaid` is the **minimum** of all `splitPayments` values — i.e. the number of
+    months fully paid by everyone. Each month's amount uses largest-remainder
+    distribution for exact reconciliation, and a per-month due date is derived from
+    `startDate` plus the card's `dueDay`.
 
 ---
 

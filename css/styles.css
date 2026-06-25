@@ -1942,11 +1942,11 @@ table.ct-charges tr.settled td { color: var(--ct-text-faint); }
 .ct-user-li {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   background: var(--ct-bg-elev2);
   border: 1px solid var(--ct-glass-border);
   border-radius: var(--ct-radius-sm);
-  padding: 12px 16px;
+  padding: 10px 14px;
   transition: border-color 0.15s;
 }
 
@@ -1954,8 +1954,47 @@ table.ct-charges tr.settled td { color: var(--ct-text-faint); }
 
 .ct-u-name {
   font-weight: 600;
-  padding-left: 12px;
   font-size: 0.9rem;
+  flex: 1;
+}
+
+.ct-user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+}
+
+.ct-user-color {
+  width: 32px;
+  height: 32px;
+  padding: 2px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.ct-user-reorder {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ct-user-reorder .ct-icon-btn {
+  font-size: 0.6rem;
+  padding: 1px 6px;
+  line-height: 1.2;
+}
+
+.ct-user-reorder .ct-icon-btn[disabled] {
+  opacity: 0.25;
+  cursor: not-allowed;
 }
 
 /* ===== HELP MODAL ===== */

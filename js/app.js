@@ -401,7 +401,6 @@ function renderDashboard() {
   var html = '<div class="ct-app">';
   html += renderTopbar();
   html += renderStats();
-  html += renderWhoOwes();
   html += renderBreakdowns();
   html += renderToolbar();
   var cards = visibleCards();
@@ -464,38 +463,6 @@ function statBox(label,value,sub,cls) {
     '<div class="ct-stat-sub">'+sub+'</div></div>';
 }
 
-// Compute directional debts: [{from, to, amount}] — "from" owes "to"
-function computeDebts() {
-  var debts = {}; // key: "fromId->toId", value: cents
-  state.transactions.forEach(function(t){
-    if(txSettled(t)) return;
-    var card = state.cards.find(function(c){return c.id===t.cardId;});
-    if(!card) return;
-    var ownerId = card.ownerId;
-    t.splits.forEach(function(sp){
-      if(sp.userId !== ownerId && !sp.paid) {
-        var amt = 0;
-        if(t.installment) {
-          var pct = sp.amountCents / t.amountCents;
-          amt = Math.round(txRemaining(t) * pct);
-        } else {
-          amt = sp.amountCents;
-        }
-        if(amt > 0) {
-          var key = sp.userId + "->" + ownerId;
-          debts[key] = (debts[key] || 0) + amt;
-        }
-      }
-    });
-  });
-  var result = [];
-  Object.keys(debts).forEach(function(key){
-    var parts = key.split("->");
-    result.push({from: parts[0], to: parts[1], amount: debts[key]});
-  });
-  return result;
-}
-
 // Per-card split summary: [{userId, totalOwed}] for non-owners who still owe
 function cardSplitSummary(cardId) {
   var card = state.cards.find(function(c){return c.id===cardId;});
@@ -521,40 +488,6 @@ function cardSplitSummary(cardId) {
     result.push(byUser[uid]);
   });
   return result;
-}
-
-function renderWhoOwes() {
-  if(state.users.length < 2) return "";
-  var debts = computeDebts();
-  if(debts.length === 0) {
-    return '<section class="ct-who-owes" aria-label="Settlement status">'+
-      '<h2 class="ct-section-title">Settlements</h2>'+
-      '<div class="ct-settled-msg">&#10003; Everyone is settled up!</div></section>';
-  }
-  var totalOwed = debts.reduce(function(s,d){return s+d.amount;},0);
-  var rows = '';
-  debts.forEach(function(d){
-    rows += '<div class="ct-debt-flow">' +
-      '<div class="ct-debt-from" style="--user-color:'+esc(userColor(d.from))+'">'+
-        '<span class="ct-debt-avatar">'+esc(userName(d.from).charAt(0))+'</span>'+
-        '<span class="ct-debt-name">'+esc(userName(d.from))+'</span>'+
-      '</div>'+
-      '<div class="ct-debt-arrow">' +
-        '<span class="ct-debt-line"></span>'+
-        '<span class="ct-debt-amount">'+fmtMoney(d.amount)+'</span>'+
-        '<span class="ct-debt-line"></span>'+
-        '<span class="ct-debt-chevron">&rarr;</span>'+
-      '</div>'+
-      '<div class="ct-debt-to" style="--user-color:'+esc(userColor(d.to))+'">'+
-        '<span class="ct-debt-avatar">'+esc(userName(d.to).charAt(0))+'</span>'+
-        '<span class="ct-debt-name">'+esc(userName(d.to))+'</span>'+
-      '</div>'+
-    '</div>';
-  });
-  return '<section class="ct-who-owes" aria-label="Who owes what">'+
-    '<div class="ct-owes-header"><h2 class="ct-section-title">Settlements</h2>'+
-    '<span class="ct-owes-total">'+fmtMoney(totalOwed)+' outstanding</span></div>'+
-    rows+'</section>';
 }
 
 function renderBreakdowns() {
@@ -799,7 +732,6 @@ function renderDetail() {
         statBox("Card total",fmtMoney(balance),"all cycles"," ")+
         '</section>';
 
-      html += renderCycleSettlements(card, cycle);
       html += renderCycleBreakdowns(card, cycle);
     }
 
@@ -836,27 +768,59 @@ function renderDetail() {
   return html;
 }
 
-// Group transactions into billing cycles based on card's due day
+// Group transactions into billing cycles based on the card's statement + due day
 function groupByCycle(txs, card) {
   var dueDay = card.dueDay || 1;
+  var stmtDay = card.statementDay || null;
 
-  // Determine which cycle a transaction falls into
-  // A cycle runs from (prev due day + 1) through (this due day)
-  // For installments, each unpaid month has its own cycle entry
+  // Which statement's DUE DATE does a transaction on `dateStr` belong to?
+  // Real-card model: a purchase belongs to the statement that is still open when
+  // it's made (i.e. closes on the next statement day on/after it). That statement's
+  // due date is dueDay — in the same month as the close if dueDay > statementDay,
+  // otherwise the following month.
   function cycleDueDate(dateStr) {
-    // Given a transaction date, find which billing cycle's due date it belongs to
     if(!dateStr) return nextDueDate(dueDay);
     var d = new Date(dateStr);
     if(isNaN(d)) return nextDueDate(dueDay);
     var y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
-    // If transaction date is after this month's due day, it goes to next month's cycle
-    var thisDue = Math.min(dueDay, daysInMonth(y, m));
-    if(day > thisDue) {
-      m++;
-      if(m > 11) { m = 0; y++; }
+
+    if(stmtDay) {
+      // Find the statement close month: if the txn is after this month's close,
+      // it rolls into next month's statement.
+      var cy = y, cm = m;
+      var closeThis = Math.min(stmtDay, daysInMonth(cy, cm));
+      if(day > closeThis) { cm++; if(cm > 11){ cm = 0; cy++; } }
+      // Due date relative to that close month.
+      var dy = cy, dm = cm;
+      if(dueDay <= stmtDay) { dm++; if(dm > 11){ dm = 0; dy++; } }
+      var dd = Math.min(dueDay, daysInMonth(dy, dm));
+      return new Date(dy, dm, dd);
     }
-    var dd = Math.min(dueDay, daysInMonth(y, m));
-    return new Date(y, m, dd);
+    // Fallback (no statement day set): due-day boundary.
+    var thisDue = Math.min(dueDay, daysInMonth(y, m));
+    if(day > thisDue) { m++; if(m > 11){ m = 0; y++; } }
+    var dd2 = Math.min(dueDay, daysInMonth(y, m));
+    return new Date(y, m, dd2);
+  }
+
+  // Statement window (start–end) for a given due date, for the cycle label.
+  function periodForDue(due) {
+    var dy = due.getFullYear(), dm = due.getMonth();
+    if(stmtDay) {
+      // Close month is the same as due month if dueDay > stmtDay, else previous month.
+      var cy = dy, cm = dm;
+      if(dueDay <= stmtDay) { cm--; if(cm < 0){ cm = 11; cy--; } }
+      var endDay = Math.min(stmtDay, daysInMonth(cy, cm));
+      var end = new Date(cy, cm, endDay);
+      var py = cy, pm = cm - 1; if(pm < 0){ pm = 11; py--; }
+      var prevEndDay = Math.min(stmtDay, daysInMonth(py, pm));
+      var start = new Date(py, pm, prevEndDay + 1);
+      return {start:start, end:end};
+    }
+    var py2 = dy, pm2 = dm - 1; if(pm2 < 0){ pm2 = 11; py2--; }
+    var prevDue = Math.min(dueDay, daysInMonth(py2, pm2));
+    var start2 = new Date(py2, pm2, prevDue + 1);
+    return {start:start2, end:due};
   }
 
   var groups = {}; // key: "YYYY-MM-DD" of due date
@@ -869,7 +833,6 @@ function groupByCycle(txs, card) {
         var due = installmentDueDateObj(startDate, dueDay, i);
         var key = due.toISOString().slice(0,10);
         if(!groups[key]) groups[key] = {due:due, txs:[], total:0};
-        // Create a virtual entry for this installment month
         var isPaid = i < t.installment.monthsPaid;
         var monthAmt = distributeCents(t.amountCents, t.installment.months)[i];
         var virtual = Object.assign({}, t, {
@@ -881,7 +844,7 @@ function groupByCycle(txs, card) {
         if(!isPaid) groups[key].total += monthAmt;
       }
     } else {
-      // One-time: use the transaction date to assign cycle
+      // One-time: assign to the statement cycle its date falls in
       var due = cycleDueDate(t.date);
       var key = due.toISOString().slice(0,10);
       if(!groups[key]) groups[key] = {due:due, txs:[], total:0};
@@ -896,11 +859,8 @@ function groupByCycle(txs, card) {
     var g = groups[key];
     var due = g.due;
     var dueLabel = fmtDateFull(due);
-    // Range: previous due day + 1 to this due day
-    var prevMonth = new Date(due.getFullYear(), due.getMonth() - 1, 1);
-    var prevDue = Math.min(dueDay, daysInMonth(prevMonth.getFullYear(), prevMonth.getMonth()));
-    var rangeStart = new Date(prevMonth.getFullYear(), prevMonth.getMonth(), prevDue + 1);
-    var rangeLabel = fmtDate(rangeStart) + " – " + fmtDate(due);
+    var period = periodForDue(due);
+    var rangeLabel = fmtDate(period.start) + " – " + fmtDate(period.end);
     return {dueLabel:dueLabel, rangeLabel:rangeLabel, total:g.total, txs:g.txs, due:due};
   });
 }
@@ -1042,49 +1002,6 @@ function renderCardBreakdowns(card) {
   return html;
 }
 
-function renderCycleSettlements(card, cycle) {
-  // Show who owes what for this specific cycle only
-  var debts = [];
-  var ownerUnpaid = 0;
-  cycle.txs.forEach(function(t){
-    if(t._isPaidMonth) return;
-    var isVirtual = t._installmentMonth !== undefined;
-    t.splits.forEach(function(sp){
-      if(sp.paid && !isVirtual) return;
-      var amt = isVirtual ? Math.round(t._monthAmt * sp.amountCents / t.amountCents) : sp.amountCents;
-      if(amt <= 0) return;
-      if(sp.userId === card.ownerId) {
-        ownerUnpaid += amt;
-      } else {
-        var existing = debts.find(function(d){return d.from===sp.userId;});
-        if(existing) existing.amount += amt;
-        else debts.push({from:sp.userId, amount:amt});
-      }
-    });
-  });
-
-  if(debts.length === 0 && ownerUnpaid === 0) return '';
-
-  var html = '<div class="ct-card-settlements">';
-  var totalOwed = debts.reduce(function(s,d){return s+d.amount;},0);
-  html += '<div class="ct-card-settlements-header"><span class="ct-section-title" style="margin:0">Cycle settlements</span>';
-  if(totalOwed > 0) html += '<span class="ct-owes-total">'+fmtMoney(totalOwed)+' owed</span>';
-  html += '</div>';
-
-  if(ownerUnpaid > 0) {
-    html += '<div class="ct-settlement-row"><span class="ct-debt-avatar" style="background:'+esc(userColor(card.ownerId))+'">'+esc(userName(card.ownerId).charAt(0))+'</span>'+
-      '<span class="ct-settlement-label">'+esc(userName(card.ownerId))+' <span class="ct-owner-tag">owner</span></span>'+
-      '<span class="ct-settlement-amt">'+fmtMoney(ownerUnpaid)+'</span></div>';
-  }
-  debts.forEach(function(d){
-    html += '<div class="ct-settlement-row"><span class="ct-debt-avatar" style="background:'+esc(userColor(d.from))+'">'+esc(userName(d.from).charAt(0))+'</span>'+
-      '<span class="ct-settlement-label">'+esc(userName(d.from))+'</span>'+
-      '<span class="ct-settlement-amt ct-owe-red">'+fmtMoney(d.amount)+' &rarr; '+esc(userName(card.ownerId))+'</span></div>';
-  });
-  html += '</div>';
-  return html;
-}
-
 function renderCycleBreakdowns(card, cycle) {
   var txs = cycle.txs.filter(function(t){return !t._isPaidMonth;});
   if(txs.length === 0) return '';
@@ -1210,6 +1127,11 @@ function renderInstallmentsView() {
     html += '<div class="ct-detail-empty"><p>No active installment plans.</p></div>';
   } else {
     inst.forEach(function(t){
+      // Defensive: ensure per-person payment map exists (older data / edge cases)
+      if(!t.installment.splitPayments) {
+        t.installment.splitPayments = {};
+        t.splits.forEach(function(sp){ t.installment.splitPayments[sp.userId] = t.installment.monthsPaid || 0; });
+      }
       var card = state.cards.find(function(c){return c.id===t.cardId;});
       var cardName = card ? card.name : "?";
       var dueDay = card ? card.dueDay : 1;
@@ -1514,8 +1436,22 @@ function categoryDatalist() {
   var cats = {};
   state.transactions.forEach(function(t){ if(t.category) cats[t.category] = true; });
   // Add common defaults
-  ["Food","Bills","Transport","Shopping","Entertainment","Travel","Health","Subscriptions"].forEach(function(c){ cats[c]=true; });
+  ["Food","Grocery","Bills","Transport","Shopping","Entertainment","Travel","Health","Subscriptions","Others"].forEach(function(c){ cats[c]=true; });
   return Object.keys(cats).sort().map(function(c){ return '<option value="'+esc(c)+'"/>'; }).join("");
+}
+
+function categoryOptions(selected) {
+  var defaults = ["Food","Grocery","Bills","Transport","Shopping","Entertainment","Travel","Health","Subscriptions","Others"];
+  var cats = {};
+  defaults.forEach(function(c){ cats[c] = true; });
+  // Include any custom categories already used so they're preserved
+  state.transactions.forEach(function(t){ if(t.category) cats[t.category] = true; });
+  var list = Object.keys(cats).sort();
+  var opts = '<option value=""'+(!selected?' selected':'')+'>— None —</option>';
+  opts += list.map(function(c){
+    return '<option value="'+esc(c)+'"'+(c===selected?' selected':'')+'>'+esc(c)+'</option>';
+  }).join("");
+  return opts;
 }
 
 // ---------------------------------------------------------------------------
@@ -1551,10 +1487,9 @@ function openTxModal(tx, cardId) {
     '<input type="hidden" name="txId" value="'+(tx?tx.id:"")+'"/>'+
     field("Description *",'<input name="description" type="text" value="'+esc(tx?tx.description:"")+'" required/>')+
     '<div class="ct-grid2">'+
-    field("Category",'<input name="category" type="text" list="ct-categories" value="'+esc(tx?tx.category||"":"")+'" placeholder="e.g. Food, Bills, Travel"/>')+
+    field("Category",'<select name="category">'+categoryOptions(tx?tx.category||"":"")+'</select>')+
     field("Amount *",'<input name="amount" type="number" min="0.01" step="0.01" value="'+(tx?fromCents(tx.amountCents):"")+'" required/>')+
     '</div>'+
-    '<datalist id="ct-categories">'+categoryDatalist()+'</datalist>'+
     '<div class="ct-grid2">'+
     field("Card",'<select name="cardId" required>'+cardOpts+'</select>')+
     field("Date",'<input name="date" type="date" value="'+(tx?tx.date||"":"")+'"/>')+
@@ -1607,9 +1542,19 @@ function splitRow(s,idx) {
 // USER MODAL
 // ---------------------------------------------------------------------------
 function openUserModal() {
-  var rows = state.users.map(function(u){
-    return '<li class="ct-user-li"><span class="ct-u-name" style="border-left:3px solid '+esc(u.color||"#6366f1")+'">'+esc(u.name)+'</span>'+
-      '<button class="btn btn-danger-ghost btn-sm" data-action="del-user" data-id="'+u.id+'">Remove</button></li>';
+  var rows = state.users.map(function(u, i){
+    var isFirst = i === 0;
+    var isLast = i === state.users.length - 1;
+    return '<li class="ct-user-li">'+
+      '<span class="ct-user-avatar" style="background:'+esc(u.color||"#6366f1")+'">'+esc(u.name.charAt(0))+'</span>'+
+      '<span class="ct-u-name">'+esc(u.name)+'</span>'+
+      '<input type="color" class="ct-user-color" value="'+esc(u.color||"#6366f1")+'" data-action="set-user-color" data-id="'+u.id+'" title="Change color"/>'+
+      '<div class="ct-user-reorder">'+
+        '<button class="ct-icon-btn" data-action="move-user-up" data-id="'+u.id+'" aria-label="Move up"'+(isFirst?' disabled':'')+'>&#9650;</button>'+
+        '<button class="ct-icon-btn" data-action="move-user-down" data-id="'+u.id+'" aria-label="Move down"'+(isLast?' disabled':'')+'>&#9660;</button>'+
+      '</div>'+
+      '<button class="btn btn-danger-ghost btn-sm" data-action="del-user" data-id="'+u.id+'">Remove</button>'+
+    '</li>';
   }).join("") || '<li class="ct-user-li">No people yet</li>';
 
   var html = '<div class="ct-modal-head"><h2>People</h2>'+
@@ -1620,6 +1565,24 @@ function openUserModal() {
     '<button type="submit" class="btn btn-primary">Add</button></form>'+
     '<ul class="ct-user-list">'+rows+'</ul></div>';
   showModal(html);
+}
+
+function setUserColor(userId, color) {
+  var u = state.users.find(function(x){return x.id===userId;});
+  if(u){ u.color = color; saveData(); render(); openUserModal(); }
+}
+
+function moveUser(userId, dir) {
+  var i = state.users.findIndex(function(x){return x.id===userId;});
+  if(i < 0) return;
+  var j = dir === "up" ? i - 1 : i + 1;
+  if(j < 0 || j >= state.users.length) return;
+  var tmp = state.users[i];
+  state.users[i] = state.users[j];
+  state.users[j] = tmp;
+  saveData();
+  render();
+  openUserModal();
 }
 
 // ---------------------------------------------------------------------------
@@ -1897,6 +1860,9 @@ document.addEventListener("change",function(e){
     var fields=document.querySelector(".ct-inst-fields");
     if(fields) fields.hidden=!e.target.checked;
   }
+  if(e.target.getAttribute && e.target.getAttribute("data-action")==="set-user-color"){
+    setUserColor(e.target.getAttribute("data-id"), e.target.value);
+  }
 });
 
 document.addEventListener("click",function(e){
@@ -1907,6 +1873,8 @@ document.addEventListener("click",function(e){
   else if(action==="add-split-row") addSplitRowToForm();
   else if(action==="remove-split") removeSplitRowFromForm(btn.getAttribute("data-idx"));
   else if(action==="del-user") { removeUser(btn.getAttribute("data-id")); }
+  else if(action==="move-user-up") { moveUser(btn.getAttribute("data-id"), "up"); }
+  else if(action==="move-user-down") { moveUser(btn.getAttribute("data-id"), "down"); }
   else if(action==="delete-tx") {
     if(confirm("Delete this transaction?")){
       state.transactions=state.transactions.filter(function(t){return t.id!==btn.getAttribute("data-id");});
@@ -2014,28 +1982,60 @@ function submitTxForm(form) {
     var dist = distributeCents(amountCents, splits.length);
     finalSplits = splits.map(function(s,i){return {userId:s.userId,amountCents:dist[i],paid:s.paid};});
   } else {
-    // Custom amounts
+    // Custom amounts — must add up to the transaction total (allow a few cents
+    // of rounding slack, which distributeCustom then reconciles exactly).
     var customs = splits.map(function(s){return toCents(s.rawAmt);});
+    var customSum = customs.reduce(function(a,b){return a+b;},0);
+    var diff = customSum - amountCents;
+    if(Math.abs(diff) > splits.length) {
+      alert(
+        "Custom amounts must add up to the total of " + fmtMoney(amountCents) + ".\n" +
+        "Right now they sum to " + fmtMoney(customSum) +
+        " (" + (diff > 0 ? "over" : "short") + " by " + fmtMoney(Math.abs(diff)) + ")."
+      );
+      return;
+    }
     var distC = distributeCustom(amountCents, customs);
     finalSplits = splits.map(function(s,i){return {userId:s.userId,amountCents:distC[i],paid:s.paid};});
   }
 
   // Installment
+  var txId = fd.get("txId");
+  var existingTx = txId ? state.transactions.find(function(t){return t.id===txId;}) : null;
   var installment = null;
   var isInst = form.querySelector('[name="isInstallment"]');
   if(isInst && isInst.checked) {
     var months = Math.max(2,Math.min(60,parseInt(fd.get("instMonths"),10)||2));
     var paid = Math.max(0,Math.min(months,parseInt(fd.get("instPaid"),10)||0));
     var instStart = fd.get("instStart") || date || "";
-    installment = {months:months, monthsPaid:paid, startDate:instStart};
+    var prevInst = existingTx && existingTx.installment ? existingTx.installment : null;
+
+    // Build per-person payment tracking. If editing and the overall "months paid"
+    // field was left unchanged, preserve each person's individual progress;
+    // otherwise apply the entered value uniformly.
+    var keepPerPerson = prevInst && prevInst.splitPayments && paid === (prevInst.monthsPaid || 0);
+    var splitPayments = {};
+    finalSplits.forEach(function(s){
+      var v = keepPerPerson && prevInst.splitPayments[s.userId] != null
+        ? prevInst.splitPayments[s.userId]
+        : paid;
+      splitPayments[s.userId] = Math.max(0, Math.min(months, v));
+    });
+    // monthsPaid = the number of months everyone has paid (minimum)
+    var minPaid = months;
+    finalSplits.forEach(function(s){ if(splitPayments[s.userId] < minPaid) minPaid = splitPayments[s.userId]; });
+    installment = {
+      months: months,
+      monthsPaid: finalSplits.length ? minPaid : paid,
+      startDate: instStart,
+      splitPayments: splitPayments
+    };
   }
 
-  var txId = fd.get("txId");
   if(txId) {
-    var tx = state.transactions.find(function(t){return t.id===txId;});
-    if(tx) {
-      tx.cardId=cardId; tx.description=description; tx.category=category; tx.amountCents=amountCents;
-      tx.date=date; tx.splits=finalSplits; tx.installment=installment;
+    if(existingTx) {
+      existingTx.cardId=cardId; existingTx.description=description; existingTx.category=category; existingTx.amountCents=amountCents;
+      existingTx.date=date; existingTx.splits=finalSplits; existingTx.installment=installment;
     }
   } else {
     state.transactions.push({
