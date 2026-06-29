@@ -1,4 +1,4 @@
-﻿/* =============================================================================
+/* =============================================================================
  * Credit Tracker — Theme & Styles
  * Premium dark theme with glassmorphism, inspired by the patrices design system.
  * All colors/fonts/spacing via --ct-* custom properties for easy rebranding.
@@ -1769,15 +1769,15 @@ table.ct-charges tr.settled td { color: var(--ct-text-faint); }
 }
 
 .ct-partial-tag {
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.35);
-  background: rgba(251, 191, 36, 0.10);
+  color: var(--ct-amber);
+  border-color: var(--ct-amber);
+  background: var(--ct-amber-glow);
 }
 
 .ct-overdue-tag {
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.45);
-  background: rgba(251, 191, 36, 0.12);
+  color: var(--ct-amber);
+  border-color: var(--ct-amber);
+  background: var(--ct-amber-glow);
 }
 
 .ct-carried-tag {
@@ -1788,12 +1788,12 @@ table.ct-charges tr.settled td { color: var(--ct-text-faint); }
 
 /* Partially-paid installment month: some payers done, others still owe. */
 table.ct-charges tr.partial td:first-child {
-  box-shadow: inset 3px 0 0 #fbbf24;
+  box-shadow: inset 3px 0 0 var(--ct-amber);
 }
 
 /* Carried-over (overdue) item surfaced in the active cycle */
 table.ct-charges tr.over td:first-child {
-  box-shadow: inset 3px 0 0 #fbbf24;
+  box-shadow: inset 3px 0 0 var(--ct-amber);
 }
 
 /* An item that has been carried forward, shown greyed in its original cycle */
@@ -1817,7 +1817,7 @@ table.ct-charges tr.ct-group-row td {
   padding-bottom: 8px;
 }
 table.ct-charges tr.ct-group-row.ct-group-over td {
-  color: #fbbf24;
+  color: var(--ct-amber);
 }
 
 .ct-row-actions {
