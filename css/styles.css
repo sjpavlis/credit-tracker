@@ -1632,6 +1632,14 @@ table.ct-charges th, table.ct-charges td {
   text-align: left;
   border-bottom: 1px solid var(--ct-border);
   white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* Uniform row height regardless of cell content (icon actions vs the
+   "Installment" label). Acts as a minimum, so rows with wrapped split
+   chips can still grow. */
+table.ct-charges tbody td {
+  height: 52px;
 }
 
 table.ct-charges thead th {
@@ -1662,60 +1670,60 @@ table.ct-charges tr.settled td { color: var(--ct-text-faint); }
 
 .ct-c-desc { white-space: normal; min-width: 130px; }
 
-.ct-c-split { white-space: normal; min-width: 100px; max-width: 180px; }
+.ct-c-split { white-space: nowrap; min-width: 90px; max-width: 200px; }
 
-/* Split chips in table */
-.ct-split-chips {
+/* Split column: single-line avatar stack (uniform row height) */
+.ct-split-stack {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
 }
 
-.ct-split-chip {
+.ct-split-av {
+  width: 24px; height: 24px;
+  border-radius: 50%;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--ct-border);
-  border-radius: 999px;
-  padding: 2px 8px 2px 2px;
-  font-size: 0.7rem;
-  white-space: nowrap;
-  transition: background 0.15s;
-}
-
-.ct-split-chip:hover {
-  background: rgba(99, 102, 241, 0.08);
-}
-
-.ct-split-chip.ct-chip-paid {
-  opacity: 0.5;
-}
-
-.ct-split-chip.ct-chip-click {
-  cursor: pointer;
-}
-.ct-split-chip.ct-chip-click:hover {
-  background: rgba(99, 102, 241, 0.18);
-  border-color: var(--ct-border-hi);
-}
-
-.ct-split-chip-dot {
-  width: 18px; height: 18px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
   justify-content: center;
-  font-size: 0.58rem;
+  font-size: 0.62rem;
   font-weight: 700;
   color: #fff;
   flex-shrink: 0;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 
-.ct-split-chip-amt {
+.ct-split-av.ct-chip-click { cursor: pointer; }
+.ct-split-av.ct-chip-click:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.ct-av-paid { opacity: 0.4; }
+
+/* Owner gets a subtle ring */
+.ct-av-owner { box-shadow: 0 0 0 2px var(--ct-primary); }
+.ct-av-owner.ct-chip-click:hover { box-shadow: 0 0 0 2px var(--ct-primary), 0 2px 8px rgba(0, 0, 0, 0.35); }
+
+/* Overflow indicator (+N more payers) */
+.ct-split-more {
+  background: var(--ct-bg-elev2) !important;
+  color: var(--ct-text-dim) !important;
+  border: 1px solid var(--ct-border);
+  font-size: 0.58rem;
+}
+
+/* Inline amount shown when a single payer is displayed */
+.ct-split-solo-amt {
+  font-size: 0.74rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--ct-text-dim);
+  margin-left: 2px;
+}
+.ct-split-solo-paid {
+  color: var(--ct-green);
+  text-decoration: line-through;
+  opacity: 0.7;
 }
 
 .ct-c-date {
@@ -1760,11 +1768,111 @@ table.ct-charges tr.settled td { color: var(--ct-text-faint); }
   background: var(--ct-green-glow);
 }
 
+.ct-partial-tag {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.10);
+}
+
+.ct-overdue-tag {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.ct-carried-tag {
+  color: var(--ct-text-faint);
+  border-color: var(--ct-border);
+  background: none;
+}
+
+/* Partially-paid installment month: some payers done, others still owe. */
+table.ct-charges tr.partial td:first-child {
+  box-shadow: inset 3px 0 0 #fbbf24;
+}
+
+/* Carried-over (overdue) item surfaced in the active cycle */
+table.ct-charges tr.over td:first-child {
+  box-shadow: inset 3px 0 0 #fbbf24;
+}
+
+/* An item that has been carried forward, shown greyed in its original cycle */
+table.ct-charges tr.carried td {
+  color: var(--ct-text-faint);
+}
+table.ct-charges tr.carried td:first-child {
+  box-shadow: inset 3px 0 0 var(--ct-text-faint);
+}
+
+/* Section divider rows inside the charges table */
+table.ct-charges tr.ct-group-row td {
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ct-text-dim);
+  height: auto;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+table.ct-charges tr.ct-group-row.ct-group-over td {
+  color: #fbbf24;
+}
+
 .ct-row-actions {
-  display: flex;
-  gap: 6px;
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: middle;
+  width: 1%;
+}
+
+.ct-actions {
+  display: inline-flex;
+  gap: 4px;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+/* Compact, uniform icon action buttons (mark paid / edit / delete) */
+.ct-act-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--ct-radius-xs);
+  color: var(--ct-text-dim);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ct-act-btn svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
+.ct-act-btn:hover {
+  color: var(--ct-text);
+  background: var(--ct-bg-elev2);
+  border-color: var(--ct-glass-border);
+}
+
+.ct-act-btn.paid {
+  color: var(--ct-green);
+  border-color: rgba(52, 211, 153, 0.25);
+  background: var(--ct-green-glow);
+}
+
+.ct-act-btn.danger:hover {
+  color: var(--ct-red);
+  border-color: var(--ct-red);
 }
 
 .ct-rbtn {
@@ -1801,6 +1909,9 @@ table.ct-charges tr.settled td { color: var(--ct-text-faint); }
 }
 
 .ct-inst-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   font-size: 0.68rem;
   color: var(--ct-text-faint);
   font-style: italic;

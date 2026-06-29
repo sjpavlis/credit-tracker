@@ -234,12 +234,31 @@ function seed() {
 // DERIVED CALCULATIONS
 // ===========================================================================
 function txRemaining(t) {
-  if(!t.installment) return t.amountCents;
-  var m = t.installment.months, paid = t.installment.monthsPaid;
+  if(!t.installment) {
+    // One-time: only the unpaid splits still count toward the balance.
+    var r = 0;
+    t.splits.forEach(function(sp){ if(!sp.paid) r += sp.amountCents; });
+    return r;
+  }
+  var m = t.installment.months;
   var perMonth = distributeCents(t.amountCents, m);
-  var rem = 0;
-  for(var i=paid;i<m;i++) rem += perMonth[i];
-  return rem;
+  var sp = t.installment.splitPayments;
+  if(sp) {
+    // Per-person: subtract each payer's share for every month they've paid.
+    // Handles the partial case where one payer is ahead of another.
+    var rem = t.amountCents;
+    t.splits.forEach(function(s){
+      var paidMonths = sp[s.userId] || 0;
+      for(var i = 0; i < paidMonths && i < m; i++) {
+        rem -= Math.round(perMonth[i] * s.amountCents / t.amountCents);
+      }
+    });
+    return Math.max(0, rem);
+  }
+  var paid = t.installment.monthsPaid;
+  var rem2 = 0;
+  for(var j = paid; j < m; j++) rem2 += perMonth[j];
+  return rem2;
 }
 
 function txMonthly(t) {
@@ -721,6 +740,30 @@ function renderDetail() {
     selectedIdx = Math.max(0, Math.min(selectedIdx, cycles.length - 1));
     var cycle = cycles[selectedIdx];
 
+    // --- Carry-over (display only) ---------------------------------------
+    // Unpaid items from past (overdue) cycles surface at the top of the ACTIVE
+    // cycle so the default view shows everything still owed. This only
+    // re-attributes WHERE an unpaid item is shown; stored data and the
+    // card-level totals (balance / owes / owed) are never touched, so nothing
+    // is ever counted twice.
+    function entryRemaining(et){ return (et._installmentMonth!==undefined) ? (et._monthUnpaid||0) : txRemaining(et); }
+    function entryUnpaidNow(et){ return (et._installmentMonth!==undefined) ? !et._isPaidMonth : !txSettled(et); }
+    var activeLabel = cycles[activeCycleIdx] ? cycles[activeCycleIdx].dueLabel : "";
+    var carried = [];
+    if(selectedIdx === activeCycleIdx) {
+      for(var pi = 0; pi < activeCycleIdx; pi++) {
+        cycles[pi].txs.forEach(function(et){
+          if(!entryUnpaidNow(et)) return;
+          carried.push(Object.assign({}, et, {_carry:{mode:"overdue", label:cycles[pi].dueLabel}}));
+        });
+      }
+    }
+    var carriedRemaining = personFilter
+      ? carried.reduce(function(s,t){ return s + personUnpaidShareOnEntry(t, personFilter); }, 0)
+      : carried.reduce(function(s,t){ return s + entryRemaining(t); }, 0);
+    var hasCarried = (selectedIdx === activeCycleIdx && carried.length > 0);
+    var pastCarryForward = (selectedIdx < activeCycleIdx);
+
     // Cycle navigator: prev | dropdown | next
     html += '<div class="ct-cycle-nav">';
     html += '<button class="btn btn-ghost btn-sm" data-action="cycle-prev" data-idx="'+selectedIdx+'"'+(selectedIdx<=0?' disabled':'')+'>&larr; Prev</button>';
@@ -745,33 +788,56 @@ function renderDetail() {
         // Scope every figure to the filtered person's share.
         cycleTotal = cycle.txs.reduce(function(s,t){ return s + personShareOnEntry(t, personFilter); }, 0);
         cycleUnpaid = cycle.txs.reduce(function(s,t){ return s + personUnpaidShareOnEntry(t, personFilter); }, 0);
-        cyclePaid = cycleTotal - cycleUnpaid;
         cardTotalStat = cardUserAmounts(card, "all")[personFilter] || 0;
         cardTotalSub = "all cycles";
       } else {
         cycleTotal = cycle.txs.reduce(function(s,t){ return s + (t._monthAmt || t.amountCents); }, 0);
         cycleUnpaid = cycle.total;
-        cyclePaid = cycleTotal - cycleUnpaid;
         cardTotalStat = balance;
         cardTotalSub = "all cycles";
       }
+      // Carry-over adjustments (display only). Carried remaining is added to both
+      // total and unpaid (so "Paid" is unaffected); a past cycle whose unpaid
+      // items have moved forward shows 0 owed here.
+      if(hasCarried) {
+        cycleTotal += carriedRemaining;
+        cycleUnpaid += carriedRemaining;
+      } else if(pastCarryForward) {
+        cycleUnpaid = 0;
+      }
+      cyclePaid = cycleTotal - cycleUnpaid;
 
+      var statItemCount = cycle.txs.length + (hasCarried ? carried.length : 0);
       html += '<section class="ct-detail-stats">'+
         statBox("This cycle",fmtMoney(cycleUnpaid),"unpaid"," ")+
-        statBox("Cycle total",fmtMoney(cycleTotal),cycle.txs.length+" item"+(cycle.txs.length!==1?"s":"")," ")+
+        statBox("Cycle total",fmtMoney(cycleTotal),statItemCount+" item"+(statItemCount!==1?"s":"")," ")+
         statBox("Paid",fmtMoney(cyclePaid),""," ")+
         statBox(personFilter?"Their card total":"Card total",fmtMoney(cardTotalStat),cardTotalSub," ")+
         '</section>';
 
-      html += renderCycleBreakdowns(card, cycle, personFilter);
+      // Breakdowns reflect what is owed in this view: include carried items in
+      // the active cycle; exclude carried-forward (unpaid) items in a past cycle.
+      var breakdownCycle = cycle;
+      if(hasCarried) {
+        breakdownCycle = Object.assign({}, cycle, {txs: carried.concat(cycle.txs)});
+      } else if(pastCarryForward) {
+        breakdownCycle = Object.assign({}, cycle, {txs: cycle.txs.filter(function(t){ return !entryUnpaidNow(t); })});
+      }
+      html += renderCycleBreakdowns(card, breakdownCycle, personFilter);
     }
 
     // Show the single selected cycle
     if(cycle) {
-      var itemCount = cycle.txs.length;
-      var headerTotal = personFilter
-        ? cycle.txs.reduce(function(s,t){ return s + personUnpaidShareOnEntry(t, personFilter); }, 0)
-        : cycle.total;
+      var ownCount = cycle.txs.length;
+      var itemCount = ownCount + (hasCarried ? carried.length : 0);
+      var headerTotal;
+      if(personFilter) {
+        headerTotal = cycle.txs.reduce(function(s,t){ return s + personUnpaidShareOnEntry(t, personFilter); }, 0);
+      } else {
+        headerTotal = cycle.total;
+      }
+      if(hasCarried) headerTotal += carriedRemaining;
+      else if(pastCarryForward) headerTotal = 0;
       html += '<div class="ct-cycle-group ct-cycle-active">';
       html += '<div class="ct-cycle-header ct-cycle-header-active">' +
         '<div class="ct-cycle-label">' +
@@ -790,7 +856,19 @@ function renderDetail() {
         html += '<div class="ct-detail-tablewrap"><table class="ct-charges" aria-label="Transactions due '+esc(cycle.dueLabel)+'">'+
           '<thead><tr><th>Description</th><th>Category</th><th>Split</th><th class="num">Amount</th>'+
           '<th>Plan</th><th class="num">Monthly</th><th class="num">Remaining</th><th aria-label="Actions"></th></tr></thead><tbody>';
-        cycle.txs.forEach(function(t){ html += renderTxRow(card,t,personFilter); });
+        if(hasCarried) {
+          html += '<tr class="ct-group-row ct-group-over"><td colspan="8">\u26a0 Carried over from previous cycles</td></tr>';
+          carried.forEach(function(t){ html += renderTxRow(card,t,personFilter,t._carry); });
+          if(ownCount > 0) html += '<tr class="ct-group-row"><td colspan="8">This cycle</td></tr>';
+          cycle.txs.forEach(function(t){ html += renderTxRow(card,t,personFilter,null); });
+        } else if(pastCarryForward) {
+          cycle.txs.forEach(function(t){
+            var ci = entryUnpaidNow(t) ? {mode:"forward", label:activeLabel} : null;
+            html += renderTxRow(card,t,personFilter,ci);
+          });
+        } else {
+          cycle.txs.forEach(function(t){ html += renderTxRow(card,t,personFilter,null); });
+        }
         html += '</tbody></table></div>';
       }
       html += '</div></div>';
@@ -862,21 +940,35 @@ function groupByCycle(txs, card) {
 
   txs.forEach(function(t){
     if(t.installment) {
-      // Installment: each unpaid month goes into its own cycle
+      // Installment: each month goes into its own cycle. Paid status is tracked
+      // PER PERSON (splitPayments), so a month can be fully paid, partially paid
+      // (some payers done, others not), or fully unpaid.
       var startDate = t.installment.startDate || t.date || t.createdAt || "";
+      var sp = t.installment.splitPayments || {};
+      var perMonth = distributeCents(t.amountCents, t.installment.months);
       for(var i = 0; i < t.installment.months; i++) {
         var due = installmentDueDateObj(startDate, dueDay, i);
         var key = due.toISOString().slice(0,10);
         if(!groups[key]) groups[key] = {due:due, txs:[], total:0};
-        var isPaid = i < t.installment.monthsPaid;
-        var monthAmt = distributeCents(t.amountCents, t.installment.months)[i];
+        var monthAmt = perMonth[i];
+        // Person p has paid month i when their paid-month count exceeds i.
+        var monthSplits = t.splits.map(function(s){
+          return { userId:s.userId, amountCents:s.amountCents, paid:(sp[s.userId]||0) > i };
+        });
+        var allPaid = monthSplits.every(function(s){ return s.paid; });
+        var nonePaid = monthSplits.every(function(s){ return !s.paid; });
+        var monthUnpaid = 0;
+        monthSplits.forEach(function(s){ if(!s.paid) monthUnpaid += Math.round(monthAmt * s.amountCents / t.amountCents); });
         var virtual = Object.assign({}, t, {
           _installmentMonth: i,
           _monthAmt: monthAmt,
-          _isPaidMonth: isPaid
+          _monthUnpaid: monthUnpaid,
+          _isPaidMonth: allPaid,
+          _isPartialMonth: !allPaid && !nonePaid,
+          _monthSplits: monthSplits
         });
         groups[key].txs.push(virtual);
-        if(!isPaid) groups[key].total += monthAmt;
+        groups[key].total += monthUnpaid;
       }
     } else {
       // One-time: assign to the statement cycle its date falls in
@@ -990,15 +1082,32 @@ function renderCycleBreakdowns(card, cycle, personFilter) {
   var txs = cycle.txs.filter(function(t){return !t._isPaidMonth;});
   if(txs.length === 0) return '';
 
-  // A person's share of a (possibly installment-month) transaction.
+  // A person's UNPAID share of a (possibly installment-month) transaction.
   function personShare(t){
     var isV = t._installmentMonth !== undefined;
     var sum = 0;
+    if(isV){
+      (t._monthSplits||[]).forEach(function(s){
+        if(personFilter && s.userId !== personFilter) return;
+        if(s.paid) return;
+        sum += Math.round(t._monthAmt * s.amountCents / t.amountCents);
+      });
+      return sum;
+    }
     t.splits.forEach(function(sp){
       if(personFilter && sp.userId !== personFilter) return;
-      if(sp.paid && !isV) return;
-      sum += isV ? Math.round(t._monthAmt * sp.amountCents / t.amountCents) : sp.amountCents;
+      if(sp.paid) return;
+      sum += sp.amountCents;
     });
+    return sum;
+  }
+
+  // Total unpaid amount of an entry (across all payers).
+  function entryUnpaid(t){
+    var isV = t._installmentMonth !== undefined;
+    if(isV) return t._monthUnpaid != null ? t._monthUnpaid : t._monthAmt;
+    var sum = 0;
+    t.splits.forEach(function(sp){ if(!sp.paid) sum += sp.amountCents; });
     return sum;
   }
 
@@ -1006,7 +1115,7 @@ function renderCycleBreakdowns(card, cycle, personFilter) {
   var byCategory = {};
   txs.forEach(function(t){
     var cat = t.category || "Uncategorized";
-    var amt = personFilter ? personShare(t) : (t._monthAmt || t.amountCents);
+    var amt = personFilter ? personShare(t) : entryUnpaid(t);
     if(amt > 0) byCategory[cat] = (byCategory[cat] || 0) + amt;
   });
   var catEntries = Object.keys(byCategory).map(function(k){return {name:k, amount:byCategory[k]};});
@@ -1017,11 +1126,12 @@ function renderCycleBreakdowns(card, cycle, personFilter) {
   var byUser = {};
   txs.forEach(function(t){
     var isVirtual = t._installmentMonth !== undefined;
-    t.splits.forEach(function(sp){
+    var rows = isVirtual ? (t._monthSplits||[]) : t.splits;
+    rows.forEach(function(sp){
       if(personFilter && sp.userId !== personFilter) return;
-      if(sp.paid && !isVirtual) return;
+      if(sp.paid) return;
       var amt = isVirtual ? Math.round(t._monthAmt * sp.amountCents / t.amountCents) : sp.amountCents;
-      byUser[sp.userId] = (byUser[sp.userId] || 0) + amt;
+      if(amt > 0) byUser[sp.userId] = (byUser[sp.userId] || 0) + amt;
     });
   });
   var userEntries = Object.keys(byUser).map(function(id){return {userId:id, amount:byUser[id]};});
@@ -1054,7 +1164,18 @@ function renderCycleBreakdowns(card, cycle, personFilter) {
   return html;
 }
 
-function renderTxRow(card,t,personFilter) {
+// Small inline SVG icons for compact, uniform action buttons.
+function icon(name) {
+  var paths = {
+    check: '<path d="M20 6L9 17l-5-5"/>',
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>',
+    trash: '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>',
+    plus: '<path d="M12 5v14"/><path d="M5 12h14"/>'
+  };
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(paths[name]||'')+'</svg>';
+}
+
+function renderTxRow(card,t,personFilter,carryInfo) {
   var settled = txSettled(t);
   var inst = !!t.installment;
   var isVirtual = t._installmentMonth !== undefined;
@@ -1063,46 +1184,84 @@ function renderTxRow(card,t,personFilter) {
   var shownSplits = personFilter
     ? t.splits.filter(function(s){ return s.userId === personFilter; })
     : t.splits;
-  var splitCell = '<div class="ct-split-chips">';
-  shownSplits.forEach(function(s){
+  // Split cell: a compact, single-line avatar stack so every row keeps the SAME
+  // height regardless of how many payers. Per-person amounts live in the tooltip
+  // and the "By Person" breakdown; the Amount column shows the row total. The
+  // amount is only shown inline when the view is filtered to a single person.
+  var monthPaid = {};
+  if(isVirtual && t._monthSplits) t._monthSplits.forEach(function(s){ monthPaid[s.userId] = s.paid; });
+  function splitChipAmt(s){
+    var a = s.amountCents;
+    if(isVirtual && t.installment && t.installment.months > 1) a = Math.round(s.amountCents / t.installment.months);
+    return a;
+  }
+  var maxShown = 6;
+  var clickable = !personFilter;
+  var splitCell = '<div class="ct-split-stack">';
+  shownSplits.slice(0, maxShown).forEach(function(s){
     var name = userName(s.userId);
-    var initial = name.charAt(0);
     var color = userColor(s.userId);
     var isOwner = s.userId === card.ownerId;
-    // For virtual installment rows, show per-month share not total
-    var chipAmt = s.amountCents;
-    if(isVirtual && t.installment && t.installment.months > 1) {
-      chipAmt = Math.round(s.amountCents / t.installment.months);
-    }
-    var amt = fmtMoney(chipAmt);
-    var paidCls = s.paid ? ' ct-chip-paid' : '';
-    var clickable = !personFilter;
-    var chipAttrs = clickable ? ' data-action="filter-person" data-person="'+s.userId+'" role="button" tabindex="0"' : '';
-    var chipTitle = esc(name)+': '+amt+(s.paid?' (paid)':'')+(clickable?' \u2014 click to filter':'');
-    splitCell += '<span class="ct-split-chip'+paidCls+(clickable?' ct-chip-click':'')+'"'+chipAttrs+' title="'+chipTitle+'">' +
-      '<span class="ct-split-chip-dot" style="background:'+esc(color)+';color:'+contrastOn(color)+'">'+esc(initial)+'</span>' +
-      '<span class="ct-split-chip-amt">'+amt+'</span>' +
-      (isOwner?'<span class="ct-mini-tag">owner</span>':'')+
-      (s.paid?'<span class="ct-mini-tag ct-paid-tag">paid</span>':'')+
-    '</span>';
+    var sPaid = isVirtual ? !!monthPaid[s.userId] : s.paid;
+    var title = name+': '+fmtMoney(splitChipAmt(s))+(sPaid?' (paid)':'')+(isOwner?' (owner)':'')+(clickable?' \u2014 click to filter':'');
+    var cls = 'ct-split-av'+(sPaid?' ct-av-paid':'')+(isOwner?' ct-av-owner':'')+(clickable?' ct-chip-click':'');
+    var attrs = clickable ? ' data-action="filter-person" data-person="'+s.userId+'" role="button" tabindex="0"' : '';
+    splitCell += '<span class="'+cls+'"'+attrs+' title="'+esc(title)+'" style="background:'+esc(color)+';color:'+contrastOn(color)+'">'+esc(name.charAt(0))+'</span>';
   });
+  if(shownSplits.length > maxShown){
+    var rest = shownSplits.slice(maxShown).map(function(s){ return userName(s.userId)+': '+fmtMoney(splitChipAmt(s)); }).join(', ');
+    splitCell += '<span class="ct-split-av ct-split-more" title="'+esc(rest)+'">+'+(shownSplits.length - maxShown)+'</span>';
+  }
+  // Show the amount inline only when filtered to a single person.
+  if(personFilter && shownSplits.length === 1){
+    var only = shownSplits[0];
+    var onlyPaid = isVirtual ? !!monthPaid[only.userId] : only.paid;
+    splitCell += '<span class="ct-split-solo-amt'+(onlyPaid?' ct-split-solo-paid':'')+'">'+fmtMoney(splitChipAmt(only))+'</span>';
+  }
   splitCell += '</div>';
 
   // Handle virtual installment month entries from groupByCycle
   var plan, mo, rem;
+  var rowCls = "";
   if(isVirtual) {
     plan = "Mo "+(t._installmentMonth+1)+"/"+t.installment.months;
     mo = fmtMoney(t._monthAmt);
-    rem = t._isPaidMonth ? '<span class="ct-mini-tag ct-paid-tag">paid</span>' : fmtMoney(t._monthAmt);
-    settled = t._isPaidMonth;
+    if(t._isPaidMonth) {
+      rem = '<span class="ct-mini-tag ct-paid-tag">paid</span>';
+      settled = true;
+    } else if(t._isPartialMonth) {
+      rem = fmtMoney(t._monthUnpaid)+' <span class="ct-mini-tag ct-partial-tag">partial</span>';
+      settled = false;
+      rowCls = "partial";
+    } else {
+      rem = fmtMoney(t._monthAmt);
+      settled = false;
+    }
   } else {
-    plan = inst ? (t.installment.monthsPaid+"/"+t.installment.months+" mo") : "One-time";
-    mo = inst ? fmtMoney(txMonthly(t)) : "&mdash;";
-    rem = fmtMoney(txRemaining(t));
+    if(inst) {
+      plan = t.installment.monthsPaid+"/"+t.installment.months+" mo";
+      mo = fmtMoney(txMonthly(t));
+      rem = fmtMoney(txRemaining(t));
+    } else {
+      plan = "One-time";
+      mo = "&mdash;";
+      var anyPaid = t.splits.some(function(s){ return s.paid; });
+      var allPaid = t.splits.every(function(s){ return s.paid; });
+      if(allPaid) {
+        rem = '<span class="ct-mini-tag ct-paid-tag">paid</span>';
+      } else if(anyPaid) {
+        rem = fmtMoney(txRemaining(t))+' <span class="ct-mini-tag ct-partial-tag">partial</span>';
+        rowCls = "partial";
+      } else {
+        rem = fmtMoney(txRemaining(t));
+      }
+    }
   }
 
-  return '<tr class="'+(settled?"settled":"")+'">'+
+  var carryCls = carryInfo ? (carryInfo.mode==="forward" ? " carried" : carryInfo.mode==="overdue" ? " over" : "") : "";
+  return '<tr class="'+((settled?"settled":rowCls)+carryCls).trim()+'">'+
     '<td class="ct-c-desc">'+esc(t.description||"(no description)")+
+    (carryInfo&&carryInfo.mode==="overdue"?' <span class="ct-mini-tag ct-overdue-tag">overdue \u00b7 due '+esc(carryInfo.label)+'</span>':'')+
     (t.date?'<span class="ct-c-date">'+esc(fmtISO(t.date))+'</span>':'')+'</td>'+
     '<td class="ct-c-category">'+(t.category?'<span class="ct-c-cat">'+esc(t.category)+'</span>':'&mdash;')+'</td>'+
     '<td class="ct-c-split">'+splitCell+'</td>'+
@@ -1110,15 +1269,18 @@ function renderTxRow(card,t,personFilter) {
     '<td>'+plan+'</td>'+
     '<td class="num">'+mo+'</td>'+
     '<td class="num">'+rem+'</td>'+
-    '<td class="ct-row-actions">'+
-    (isVirtual
-      ? '<span class="ct-inst-label">Installment</span>'
-      : (inst&&!settled?'<button class="ct-rbtn" data-action="pay-month" data-id="'+t.id+'">+1 mo</button>':'')+
-        (!inst?'<button class="ct-rbtn'+(settled?" paid":"")+'" data-action="toggle-settled" data-id="'+t.id+'">'+(settled?"Settled":"Mark paid")+'</button>':'')+
-        '<button class="ct-rbtn" data-action="edit-tx" data-id="'+t.id+'">Edit</button>'+
-        '<button class="ct-icon-btn" data-action="del-tx" data-id="'+t.id+'" aria-label="Delete">&times;</button>'
+    '<td class="ct-row-actions"><div class="ct-actions">'+
+    (carryInfo&&carryInfo.mode==="forward"
+      ? '<span class="ct-mini-tag ct-carried-tag" title="Now shown in the current cycle">carried to '+esc(carryInfo.label)+' \u2192</span>'
+      : (isVirtual
+        ? '<span class="ct-inst-label">Installment</span>'
+        : (inst&&!settled?'<button class="ct-act-btn" data-action="pay-month" data-id="'+t.id+'" title="Pay 1 month" aria-label="Pay 1 month">'+icon("plus")+'</button>':'')+
+          (!inst?'<button class="ct-act-btn'+(settled?" paid":"")+'" data-action="toggle-settled" data-id="'+t.id+'" title="'+(settled?"Paid \u2014 click to unmark":"Mark paid")+'" aria-label="'+(settled?"Paid, click to unmark":"Mark paid")+'">'+icon("check")+'</button>':'')+
+          '<button class="ct-act-btn" data-action="edit-tx" data-id="'+t.id+'" title="Edit" aria-label="Edit transaction">'+icon("edit")+'</button>'+
+          '<button class="ct-act-btn danger" data-action="del-tx" data-id="'+t.id+'" title="Delete" aria-label="Delete transaction">'+icon("trash")+'</button>'
+      )
     )+
-    '</td></tr>';
+    '</div></td></tr>';
 }
 
 // ===========================================================================
@@ -1151,10 +1313,18 @@ function cardUserAmounts(card, scope) {
     if(cyc) cyc.txs.forEach(function(t){
       if(t._isPaidMonth) return;
       var isV = t._installmentMonth !== undefined;
-      t.splits.forEach(function(sp){
-        if(sp.paid && !isV) return;
-        add(sp.userId, isV ? Math.round(t._monthAmt * sp.amountCents / t.amountCents) : sp.amountCents);
-      });
+      if(isV) {
+        // Per-month, per-person: only count payers who haven't paid this month.
+        (t._monthSplits||[]).forEach(function(s){
+          if(s.paid) return;
+          add(s.userId, Math.round(t._monthAmt * s.amountCents / t.amountCents));
+        });
+      } else {
+        t.splits.forEach(function(sp){
+          if(sp.paid) return;
+          add(sp.userId, sp.amountCents);
+        });
+      }
     });
   }
   return by;
@@ -1172,7 +1342,13 @@ function personShareOnEntry(t, personId) {
 // A person's UNPAID share of one entry.
 function personUnpaidShareOnEntry(t, personId) {
   var isV = t._installmentMonth !== undefined;
-  if(isV) return t._isPaidMonth ? 0 : personShareOnEntry(t, personId);
+  if(isV) {
+    if(t._isPaidMonth) return 0;
+    // Partial month: if this person already paid their share this month, they owe 0.
+    var paidThisMonth = (t._monthSplits||[]).some(function(s){ return s.userId===personId && s.paid; });
+    if(paidThisMonth) return 0;
+    return personShareOnEntry(t, personId);
+  }
   var sum = 0;
   t.splits.forEach(function(sp){ if(sp.userId === personId && !sp.paid) sum += sp.amountCents; });
   return sum;
@@ -1518,13 +1694,18 @@ function categoryDatalist() {
 }
 
 function categoryOptions(selected) {
-  var defaults = ["Food","Grocery","Bills","Transport","Shopping","Entertainment","Travel","Health","Subscriptions","Others"];
-  var cats = {};
-  defaults.forEach(function(c){ cats[c] = true; });
-  // Include any custom categories already used so they're preserved
-  state.transactions.forEach(function(t){ if(t.category) cats[t.category] = true; });
-  var list = Object.keys(cats).sort();
-  var opts = '<option value=""'+(!selected?' selected':'')+'>— None —</option>';
+  // Curated order: everyday spend first, recurring, discretionary, then loan and
+  // a catch-all "Others" pinned last.
+  var base = ["Food","Grocery","Transport","Bills","Subscriptions","Health","Shopping","Entertainment","Travel","Loan"];
+  // Preserve any custom categories already used (e.g. imported/legacy data),
+  // inserted before "Others".
+  var used = {};
+  state.transactions.forEach(function(t){ if(t.category) used[t.category] = true; });
+  var extras = Object.keys(used).filter(function(c){
+    return base.indexOf(c) === -1 && c !== "Others";
+  }).sort();
+  var list = base.concat(extras, ["Others"]);
+  var opts = '<option value=""'+(!selected?' selected':'')+'>\u2014 None \u2014</option>';
   opts += list.map(function(c){
     return '<option value="'+esc(c)+'"'+(c===selected?' selected':'')+'>'+esc(c)+'</option>';
   }).join("");
@@ -1703,7 +1884,9 @@ function openHelpModal() {
     '<dt>Settlement</dt><dd>When someone other than the owner uses the card, they owe the owner. The owed/owns totals show who owes whom.</dd>'+
     '<dt>Billing Cycle</dt><dd>Each card has a due day (e.g. 23rd). Transactions are grouped by which billing period they fall into.</dd>'+
     '<dt>Installment</dt><dd>A purchase paid over multiple months. Set the total months and start date, and the app tracks each person\'s monthly payments with forecasted due dates.</dd>'+
-    '<dt>Category</dt><dd>Optional label for transactions (Food, Bills, Travel, etc.) to see spending breakdowns.</dd>'+
+    '<dt>Partial payment</dt><dd>A charge can be partly paid &mdash; e.g. one payer has settled their share but another hasn\'t, or some months of an installment are paid. These show a "partial" tag and only the unpaid remainder counts toward what\'s owed.</dd>'+
+    '<dt>Carried over (overdue)</dt><dd>An unpaid item from a past cycle automatically surfaces at the top of the current cycle, tagged "overdue", so you never lose track of it. In its original cycle it appears greyed and marked "carried", so nothing is counted twice.</dd>'+
+    '<dt>Category</dt><dd>Optional label for transactions (Food, Bills, Loan, etc.) to see spending breakdowns.</dd>'+
     '</dl>'+
 
     '<h3>Dashboard</h3>'+
@@ -1726,7 +1909,10 @@ function openHelpModal() {
     '<h3>Card Detail</h3>'+
     '<ul>'+
     '<li><strong>Cycle navigator</strong> &mdash; Use Prev/Next or the dropdown to view transactions for any billing cycle. Defaults to the active cycle.</li>'+
-    '<li><strong>Filter by person</strong> &mdash; Click a person\'s name or split chip to scope the whole card (stats, breakdowns, cycle totals) to just their share. Use "Show all" to clear the filter.</li>'+
+    '<li><strong>Carried over</strong> &mdash; Unpaid items from earlier cycles appear in an "overdue" group at the top of the current cycle, so the default view shows everything you still owe.</li>'+
+    '<li><strong>Split column</strong> &mdash; Shows a colored avatar per payer. Hover an avatar for that person\'s amount and status; click it to filter the card to that person. The amount also appears inline once filtered.</li>'+
+    '<li><strong>Row actions</strong> &mdash; Icons on each row: &#10003; mark paid / unmark, pencil to edit, trash to delete. A part-paid row shows a "partial" tag with the remaining amount.</li>'+
+    '<li><strong>Filter by person</strong> &mdash; Click an avatar to scope the whole card (stats, breakdowns, cycle totals) to just their share. Use "Show all" to clear the filter.</li>'+
     '<li><strong>Breakdowns</strong> &mdash; Per-card spending by category and by person.</li>'+
     '</ul>'+
 
