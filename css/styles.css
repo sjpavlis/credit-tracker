@@ -274,6 +274,7 @@ tr[data-action]:focus-visible {
   color: var(--ct-text);
   position: relative;
   overflow: hidden;
+  white-space: nowrap;
 }
 
 .btn:active { transform: translateY(1px); }
@@ -391,8 +392,18 @@ tr[data-action]:focus-visible {
   margin-top: 4px;
 }
 
+/* Scale the value down when a stat box gets narrow so amounts never clip */
+.ct-stat { container-type: inline-size; }
+@container (max-width: 170px) {
+  .ct-stat-value { font-size: 1.2rem; }
+}
+@container (max-width: 120px) {
+  .ct-stat-value { font-size: 1rem; }
+}
+
 .accent-amber { color: var(--ct-amber) !important; -webkit-text-fill-color: var(--ct-amber) !important; }
 .accent-red { color: var(--ct-red) !important; -webkit-text-fill-color: var(--ct-red) !important; }
+.accent-green { color: var(--ct-green) !important; -webkit-text-fill-color: var(--ct-green) !important; }
 
 /* ===== WHO OWES — SETTLEMENT FLOWS ===== */
 .ct-who-owes {
@@ -716,6 +727,12 @@ tr[data-action]:focus-visible {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Shrink the value before truncating when the stat column is narrow */
+.ct-cc-stat { container-type: inline-size; }
+@container (max-width: 112px) {
+  .ct-cc-stat-val { font-size: 0.9rem; }
 }
 
 .ct-cc-stat-val.amber { color: var(--ct-amber); }
@@ -1386,7 +1403,7 @@ input:focus, select:focus, textarea:focus {
 
 .ct-detail-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   margin-bottom: 24px;
 }
@@ -2604,8 +2621,25 @@ table.ct-charges tr.ct-group-row.ct-group-over td {
 
 @media (max-width: 460px) {
   .ct-grid2 { grid-template-columns: 1fr; }
+
+  /* Topbar: "+ Add card" takes its own row; nav + utility buttons share the next */
   .ct-topbar-actions { width: 100%; }
-  .ct-topbar-actions .btn { flex: 1; }
+  .ct-topbar-actions .btn { padding: 10px 12px; }
+  .ct-topbar-actions > .btn-primary { flex: 1 1 100%; }
+  .ct-nav-btn { flex: 1 1 auto; }
+  .ct-topbar-divider { display: none; }
+  .ct-topbar-utils { margin-left: auto; }
+
+  /* Detail bar: back button on top, Edit / Add transaction split a full row */
+  .ct-detail-bar-actions { width: 100%; }
+  .ct-detail-bar-actions .btn { flex: 1 1 auto; }
+
+  /* Cycle navigator: keep prev / select / next on one line */
+  .ct-cycle-nav { gap: 8px; padding: 10px 12px; }
+  .ct-cycle-nav .btn { padding: 8px 10px; }
+  .ct-cycle-nav-center { flex: 1; min-width: 0; }
+  .ct-cycle-select { min-width: 0; width: 100%; }
+
   .ct-split-row { grid-template-columns: 1fr 70px auto; }
   .ct-card-grid { grid-template-columns: 1fr; }
   .ct-stats { grid-template-columns: 1fr; }
@@ -2737,4 +2771,8 @@ table.ct-charges tr.ct-group-row.ct-group-over td {
 
 [data-theme="light"] .accent-red {
   -webkit-text-fill-color: var(--ct-red) !important;
+}
+
+[data-theme="light"] .accent-green {
+  -webkit-text-fill-color: var(--ct-green) !important;
 }

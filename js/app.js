@@ -603,7 +603,7 @@ function renderCard(c) {
     '<div class="ct-cc-stats">'+
       '<div class="ct-cc-stat"><span class="ct-cc-stat-lbl">Outstanding</span>'+
         '<span class="ct-cc-stat-val">'+fmtMoney(balance)+'</span>'+
-        '<span class="ct-cc-stat-sub">'+(c.limitCents?util+"% of limit":"no limit")+'</span></div>'+
+        '<span class="ct-cc-stat-sub">'+(c.limitCents?util+"% of limit &middot; "+fmtMoney(c.limitCents-balance)+" left":"no limit")+'</span></div>'+
       '<div class="ct-cc-stat"><span class="ct-cc-stat-lbl">Monthly</span>'+
         '<span class="ct-cc-stat-val">'+fmtMoney(cardMonthly(c))+'</span>'+
         '<span class="ct-cc-stat-sub">min. due</span></div>'+
@@ -624,7 +624,7 @@ function renderCard(c) {
 }
 
 function renderCardTable(cards) {
-  var totBal = 0, totMonthly = 0, totInst = 0;
+  var totBal = 0, totMonthly = 0, totInst = 0, totAvail = 0, anyLimit = false;
   var rows = cards.map(function(c){
     var balance = cardBalance(c);
     var monthly = cardMonthly(c);
@@ -634,6 +634,8 @@ function renderCardTable(cards) {
     var util = utilization(c);
     var barCls = util>=75?"high":util>=40?"mid":"";
     var instCount = cardTransactions(c.id).filter(function(t){return t.installment && !txSettled(t);}).length;
+    var avail = c.limitCents ? c.limitCents - balance : 0;
+    if(c.limitCents) { anyLimit = true; totAvail += avail; }
     totBal += balance; totMonthly += monthly; totInst += instCount;
 
     return '<tr data-action="open-detail" data-id="'+c.id+'" tabindex="0" role="button" aria-label="Open '+esc(c.name)+'">'+
@@ -645,6 +647,9 @@ function renderCardTable(cards) {
       '<td>'+(c.limitCents?
         '<span class="ct-tbl-util"><span class="ct-minibar"><span class="'+barCls+'" style="width:'+util+'%"></span></span>'+util+'%</span>'
         :'<span class="muted">&mdash;</span>')+'</td>'+
+      '<td class="num">'+(c.limitCents?
+        '<span class="'+(avail<0?'accent-red':'')+'">'+fmtMoney(avail)+'</span>'
+        :'<span class="muted">&mdash;</span>')+'</td>'+
       '<td class="num">'+fmtMoney(monthly)+'</td>'+
       '<td><span class="ct-tbl-pill '+st+'">'+statusLabel(days)+'</span><span class="ct-tbl-duedate">'+fmtDate(due)+'</span></td>'+
       '<td class="num">'+(instCount||'&mdash;')+'</td>'+
@@ -654,11 +659,13 @@ function renderCardTable(cards) {
   return '<div class="ct-tablewrap ct-card-tablewrap"><table class="ct-card-table" aria-label="Cards">'+
     '<thead><tr>'+
       '<th>Card</th><th>Owner</th><th class="num">Outstanding</th><th>Utilization</th>'+
+      '<th class="num">Available</th>'+
       '<th class="num">Monthly</th><th>Due</th><th class="num">Installments</th>'+
     '</tr></thead><tbody>'+rows+'</tbody>'+
     '<tfoot><tr class="ct-tbl-total">'+
       '<td>Total</td><td></td>'+
       '<td class="num">'+fmtMoney(totBal)+'</td><td></td>'+
+      '<td class="num">'+(anyLimit?fmtMoney(totAvail):'&mdash;')+'</td>'+
       '<td class="num">'+fmtMoney(totMonthly)+'</td><td></td>'+
       '<td class="num">'+(totInst||'&mdash;')+'</td>'+
     '</tr></tfoot></table></div>';
@@ -808,11 +815,22 @@ function renderDetail() {
       cyclePaid = cycleTotal - cycleUnpaid;
 
       var statItemCount = cycle.txs.length + (hasCarried ? carried.length : 0);
+      // Available credit is card-level (limit minus full outstanding balance),
+      // regardless of any person filter.
+      var availHtml = '';
+      if(card.limitCents) {
+        var availCredit = card.limitCents - balance;
+        var utilPct = utilization(card);
+        var availCls = availCredit < 0 ? "accent-red" : (utilPct >= 75 ? "accent-amber" : "accent-green");
+        availHtml = statBox("Available credit", fmtMoney(availCredit),
+          utilPct+"% used of "+fmtMoney(card.limitCents)+" limit", availCls);
+      }
       html += '<section class="ct-detail-stats">'+
         statBox("This cycle",fmtMoney(cycleUnpaid),"unpaid"," ")+
         statBox("Cycle total",fmtMoney(cycleTotal),statItemCount+" item"+(statItemCount!==1?"s":"")," ")+
         statBox("Paid",fmtMoney(cyclePaid),""," ")+
         statBox(personFilter?"Their card total":"Card total",fmtMoney(cardTotalStat),cardTotalSub," ")+
+        availHtml+
         '</section>';
 
       // Breakdowns reflect what is owed in this view: include carried items in
